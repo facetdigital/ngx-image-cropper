@@ -21,10 +21,13 @@
         "index.ts"
     ],
     "angularCompilerOptions": {
-        "skipTemplateCodegen": true,
         "annotateForClosureCompiler": true,
-        "strictMetadataEmit": true,
         "flatModuleOutFile": "ngx-image-cropper.js",
-        "flatModuleId": "ngx-image-cropper"
+        "flatModuleId": "ngx-image-cropper",
+        "fullTemplateTypeCheck": true,
+        "preserveWhitespaces": false,
+        "skipTemplateCodegen": true,
+        "strictInjectionParameters": true,
+        "strictMetadataEmit": true
     }
 }
