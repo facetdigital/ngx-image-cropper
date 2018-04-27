@@ -1,5 +1,5 @@
 {
-  "name": "ngx-image-cropper",
+  "name": "ngx-image-cropper-facet",
   "version": "0.2.5",
   "description": "An image cropper for Angular",
   "main": "./bundles/ngx-image-cropper.umd.js",
