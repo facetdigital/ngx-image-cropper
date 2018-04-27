@@ -2,8 +2,10 @@ $ cat .gitignore
 node_modules/
 documentation/
 .ng_build/
+dist/
 
 *.log
 *.tgz
 .idea/
 .vagrant/
+.DS_Store
