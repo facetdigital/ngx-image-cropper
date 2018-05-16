@@ -27,6 +27,14 @@ export interface CropperPosition {
     y2: number;
 }
 
+interface DestinationParameters {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotationDegree: number;
+}
+
 @Component({
     selector: 'image-cropper',
     templateUrl: './image-cropper.component.html',
@@ -372,24 +380,64 @@ export class ImageCropperComponent implements OnChanges {
     private crop() {
         const displayedImage = this.elementRef.nativeElement.querySelector('.source-image');
         if (displayedImage && this.originalImage != null) {
-            const ratio = this.originalSize.width / displayedImage.offsetWidth;
-            const left = Math.round(this.cropper.x1 * ratio);
-            const top = Math.round(this.cropper.y1 * ratio);
-            const width = Math.round((this.cropper.x2 - this.cropper.x1) * ratio);
-            const height = Math.round((this.cropper.y2 - this.cropper.y1) * ratio);
-            const resizeRatio = this.getResizeRatio(width);
-            const cropCanvas = document.createElement('canvas') as HTMLCanvasElement;
-            cropCanvas.width = width * resizeRatio;
-            cropCanvas.height = height * resizeRatio;
-            const ctx = cropCanvas.getContext('2d');
-            if (ctx) {
-                ctx.drawImage(this.originalImage, left, top, width, height, 0, 0, width * resizeRatio, height * resizeRatio);
-                const quality = Math.min(1, Math.max(0, this.imageQuality / 100));
-                const croppedImage = cropCanvas.toDataURL('image/' + this.format, quality);
-                if (croppedImage.length > 10) {
-                    this.imageCropped.emit(croppedImage);
+            this.orientation(this.originalImage).then((imageOrientation: number) => {
+                const ratio       = this.originalSize.width / displayedImage.offsetWidth;
+                const left        = Math.round(this.cropper.x1 * ratio);
+                const top         = Math.round(this.cropper.y1 * ratio);
+                const width       = Math.round((this.cropper.x2 - this.cropper.x1) * ratio);
+                const height      = Math.round((this.cropper.y2 - this.cropper.y1) * ratio);
+                const resizeRatio = this.getResizeRatio(width);
+
+                const destinationParameters = this.destinationParameters(
+                    width,
+                    height,
+                    imageOrientation
+                );
+
+                const resizedWidth  = destinationParameters.width * resizeRatio;
+                const resizedHeight = destinationParameters.height * resizeRatio;
+
+                const cropCanvas  = document.createElement('canvas') as HTMLCanvasElement;
+                cropCanvas.width  = resizedWidth;
+                cropCanvas.height = resizedHeight;
+
+                const context = cropCanvas.getContext('2d');
+                if (context) {
+                    // Rotate the image as necessary, which should only happen when
+                    // the image provided is from a mobile device.
+                    context.rotate(destinationParameters.rotationDegree * Math.PI / 180);
+                    // https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D/drawImage
+                    // drawImage(
+                    //     image,
+                    //     source x,
+                    //     source y,
+                    //     source width,
+                    //     source height,
+                    //     destination x,
+                    //     destination y,
+                    //     destination width,
+                    //     destination height
+                    // )
+                    context.drawImage(
+                        this.originalImage,
+                        left,
+                        top,
+                        width,
+                        height,
+                        destinationParameters.x,
+                        destinationParameters.y,
+                        resizedWidth,
+                        resizedHeight
+                    );
+
+                    const quality      = Math.min(1, Math.max(0, this.imageQuality / 100));
+                    const croppedImage = cropCanvas.toDataURL(`image/${this.format}`, quality);
+
+                    if (croppedImage.length > 10) {
+                        this.imageCropped.emit(croppedImage);
+                    }
                 }
-            }
+            });
         }
     }
 
@@ -405,5 +453,115 @@ export class ImageCropperComponent implements OnChanges {
 
     private getClientY(event: any) {
         return event.clientY != null ? event.clientY : event.touches[0].clientY;
+    }
+
+    /**
+     * Get the Exif orientation value.
+     * NOTE: Does not include flipped orientations
+     *
+     * @param {any} image Image that was attached by the user
+     *
+     * @return {Promise<number>} Promise containing the orientation of the image
+     */
+    private orientation(image: any): Promise<number>  {
+        let result: Promise<number> = new Promise((resolve, reject) => {
+            const fileReader = new FileReader();
+
+            fileReader.onloadend = (event: Event) => {
+                const dataView = new DataView(fileReader.result);
+
+                let idx   = 0;
+                let value = 1; // Non-rotated is the default
+
+                if (fileReader.result.length < 2 || dataView.getUint16(idx) !== 0xFFD8) {
+                    // Not a JPEG. Exif data will not be available so exit.
+                    resolve(value);
+                }
+
+                idx += 2;
+                let maxBytes = dataView.byteLength;
+                let littleEndian = false;
+
+                while (idx < maxBytes - 2) {
+                    const uint16 = dataView.getUint16(idx);
+                    idx += 2;
+
+                    switch (uint16) {
+                        case 0xFFE1: // Start of EXIF
+                            const endianNess = dataView.getUint16(idx + 8);
+                            // II (0x4949) Indicates Intel format - Little Endian
+                            // MM (0x4D4D) Indicates Motorola format - Big Endian
+                            if (endianNess === 0x4949) {
+                                littleEndian = true;
+                            }
+                            const exifLength = dataView.getUint16(idx, littleEndian);
+                            maxBytes = exifLength - idx;
+                            idx += 2;
+                            break;
+                        case 0x0112: // Orientation tag
+                            // Read the value, its 6 bytes further out
+                            // See page 102 at the following URL
+                            // http://www.kodak.com/global/plugins/acrobat/en/service/digCam/exifStandard2.pdf
+                            value = dataView.getUint16(idx + 6, littleEndian);
+                            maxBytes = 0; // Stop scanning
+                            break;
+                    }
+                }
+
+                resolve(value);
+            };
+
+            fileReader.readAsArrayBuffer(image);
+        });
+
+        return result;
+    }
+
+    /**
+     * Determine the parameters to use for the destination canvas so that images
+     * are not rotated horizontally when taking a photo on a mobile device.
+     *
+     * @param {number} width Original width of the provided image
+     * @param {number} height Original height of the provided image
+     * @param {number} orientation Orientation of the provided image
+     *
+     * @return {DestinationParameters} Canvas destination values
+     */
+    private destinationParameters(width: number, height: number, orientation: number): DestinationParameters {
+        let destinationX      = 0;
+        let destinationY      = 0;
+        let destinationWidth  = width;
+        let destinationHeight = height;
+        let rotationDegree    = 0;
+
+        switch(orientation) {
+            case 3:
+                destinationX   = -width;
+                destinationY   = -height;
+                rotationDegree = 180;
+                break;
+            case 6:
+                destinationWidth  = height;
+                destinationHeight = width;
+                destinationY      = -height;
+                rotationDegree    = 90;
+                break;
+            case 8:
+                destinationWidth  = height;
+                destinationHeight = width;
+                destinationX      = -width;
+                rotationDegree    = 270;
+                break;
+            default:
+                break;
+        }
+
+        return {
+            x: destinationX,
+            y: destinationY,
+            width: destinationWidth,
+            height: destinationHeight,
+            rotationDegree
+        }
     }
 }
